@@ -22,6 +22,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - name: Create release
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -189,6 +190,7 @@ jobs:
           path: dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -203,6 +205,7 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
       - name: Refresh release checksums
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         continue-on-error: true
         shell: bash
         env:
@@ -325,6 +328,7 @@ jobs:
           path: dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -339,6 +343,7 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
       - name: Refresh release checksums
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         continue-on-error: true
         shell: bash
         env:
@@ -444,6 +449,7 @@ jobs:
           path: dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -458,6 +464,7 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
       - name: Refresh release checksums
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         continue-on-error: true
         shell: bash
         env:
@@ -645,6 +652,7 @@ jobs:
           path: dist/CLIProxyAPI_*
           if-no-files-found: error
       - name: Upload release assets
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -659,6 +667,7 @@ jobs:
           fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
       - name: Refresh release checksums
+        if: ${{ github.repository == 'router-for-me/CLIProxyAPI' }}
         continue-on-error: true
         shell: bash
         env:
@@ -690,7 +699,7 @@ jobs:
 
   publish-checksums:
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ github.repository == 'router-for-me/CLIProxyAPI' && (always()) }}
     needs:
       - build-hosted
       - build-linux-glibc
