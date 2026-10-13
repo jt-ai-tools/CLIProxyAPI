@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -53,8 +53,34 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 		return &config, nil
 	}
 
-	allowClampUnsupported := isBudgetBasedProvider(fromFormat) && isLevelBasedProvider(toFormat)
-	strictBudget := !fromSuffix && fromFormat != "" && isSameProviderFamily(fromFormat, toFormat)
+	// allowClampUnsupported determines whether to clamp unsupported levels instead of returning an error.
+	// This applies when crossing provider families (e.g., openai→gemini, claude→gemini) and the target
+	// model supports discrete levels. Same-family conversions require strict validation.
+	//
+	// modelFamilyMismatch covers providers that reuse another protocol on the wire
+	// (e.g. Kimi serving Claude-compatible /v1/messages). In that path fromFormat and
+	// toFormat both look like "claude", but the model itself is not Claude-family, so
+	// unsupported levels such as "max" should clamp to the nearest supported level
+	// (typically "high") instead of failing validation.
+	toCapability := detectModelCapability(modelInfo)
+	toHasLevelSupport := toCapability == CapabilityLevelOnly || toCapability == CapabilityHybrid
+	modelFamilyMismatch := false
+	if modelInfo != nil {
+		modelType := strings.ToLower(strings.TrimSpace(modelInfo.Type))
+		if modelType != "" {
+			if (fromFormat != "" && !isSameProviderFamily(fromFormat, modelType)) ||
+				(toFormat != "" && !isSameProviderFamily(toFormat, modelType)) {
+				modelFamilyMismatch = true
+			}
+		}
+	}
+	allowClampUnsupported := toHasLevelSupport && (!isSameProviderFamily(fromFormat, toFormat) || modelFamilyMismatch)
+
+	// strictBudget determines whether to enforce strict budget range validation.
+	// This applies when: (1) config comes from request body (not suffix), (2) source format is known,
+	// and (3) source and target are in the same provider family. Cross-family or suffix-based configs
+	// are clamped instead of rejected to improve interoperability.
+	strictBudget := !fromSuffix && fromFormat != "" && isSameProviderFamily(fromFormat, toFormat) && !modelFamilyMismatch
 	budgetDerivedFromLevel := false
 
 	capability := detectModelCapability(modelInfo)
@@ -131,6 +157,13 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 	// Convert ModeAuto to mid-range if dynamic not allowed
 	if config.Mode == ModeAuto && !support.DynamicAllowed {
 		config = convertAutoToMidRange(config, support, toFormat, model)
+		// The canonical mid-range level may not be present in a model's discrete
+		// level subset (for example, Levels=[low, high]). Clamp the generated
+		// fallback just like a budget-derived level so providers never receive an
+		// unsupported value.
+		if config.Mode == ModeLevel && len(support.Levels) > 0 && !isLevelSupported(string(config.Level), support.Levels) {
+			config.Level = clampLevel(config.Level, modelInfo, toFormat)
+		}
 	}
 
 	if config.Mode == ModeNone && toFormat == "claude" {
@@ -144,9 +177,12 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 			config.Budget = clampBudget(config.Budget, modelInfo, toFormat)
 		}
 
-		// ModeNone with clamped Budget > 0: set Level to lowest for Level-only/Hybrid models
-		// This ensures Apply layer doesn't need to access support.Levels
-		if config.Mode == ModeNone && config.Budget > 0 && len(support.Levels) > 0 {
+		// ModeNone for a model that cannot be disabled falls back to the lowest
+		// supported level. Budget-capable models reach this path with Budget > 0;
+		// level-only models need the capability flags checked explicitly because
+		// their Min/Max range is zero.
+		cannotDisableLevelModel := !support.ZeroAllowed && !isLevelSupported(string(LevelNone), support.Levels)
+		if config.Mode == ModeNone && len(support.Levels) > 0 && (config.Budget > 0 || cannotDisableLevelModel) {
 			config.Level = ThinkingLevel(support.Levels[0])
 		}
 	}
@@ -201,7 +237,7 @@ func convertAutoToMidRange(config ThinkingConfig, support *registry.ThinkingSupp
 }
 
 // standardLevelOrder defines the canonical ordering of thinking levels from lowest to highest.
-var standardLevelOrder = []ThinkingLevel{LevelMinimal, LevelLow, LevelMedium, LevelHigh, LevelXHigh}
+var standardLevelOrder = []ThinkingLevel{LevelMinimal, LevelLow, LevelMedium, LevelHigh, LevelXHigh, LevelMax}
 
 // clampLevel clamps the given level to the nearest supported level.
 // On tie, prefers the lower level.
@@ -325,18 +361,11 @@ func normalizeLevels(levels []string) []string {
 	return out
 }
 
-func isBudgetBasedProvider(provider string) bool {
+// isBudgetCapableProvider returns true if the provider supports budget-based thinking.
+// These providers may also support level-based thinking (hybrid models).
+func isBudgetCapableProvider(provider string) bool {
 	switch provider {
-	case "gemini", "gemini-cli", "antigravity", "claude":
-		return true
-	default:
-		return false
-	}
-}
-
-func isLevelBasedProvider(provider string) bool {
-	switch provider {
-	case "openai", "openai-response", "codex":
+	case "gemini", "antigravity", "claude":
 		return true
 	default:
 		return false
@@ -345,7 +374,16 @@ func isLevelBasedProvider(provider string) bool {
 
 func isGeminiFamily(provider string) bool {
 	switch provider {
-	case "gemini", "gemini-cli", "antigravity":
+	case "gemini", "antigravity":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOpenAIFamily(provider string) bool {
+	switch provider {
+	case "openai", "openai-response", "codex":
 		return true
 	default:
 		return false
@@ -356,7 +394,8 @@ func isSameProviderFamily(from, to string) bool {
 	if from == to {
 		return true
 	}
-	return isGeminiFamily(from) && isGeminiFamily(to)
+	return (isGeminiFamily(from) && isGeminiFamily(to)) ||
+		(isOpenAIFamily(from) && isOpenAIFamily(to))
 }
 
 func abs(x int) int {
